@@ -1,52 +1,57 @@
 import cv2
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
+from ultralytics import YOLO
+from collections import deque, Counter
 
-# 이미지 경로
-hand_model_path = "/mnt/data/A_simple_2D_digital_illustration_depicts_an_open_h.png"
+# YOLO 모델 불러오기 (너의 손 동작 인식용 모델 경로로 수정)
+model = YOLO(r"D:\다운로드\runs\runs\detect\train2\weights\best.pt")
 
-# 이미지 로드
-hand_img = cv2.imread(hand_model_path)
-hand_img = cv2.cvtColor(hand_img, cv2.COLOR_BGR2RGB)
+# 최근 예측 결과를 저장할 deque
+history = deque(maxlen=10)  # 최근 10프레임 저장
 
-# 손 부위 시각화를 위한 더미 데이터 (예: palm, fingers, thumb 등)
-# 예제이므로 대략적인 위치에 색상을 칠함
-overlay = hand_img.copy()
-height, width, _ = hand_img.shape
+# 클래스 이름 리스트 (너의 6가지 손동작 이름으로 수정)
+class_names = ["0.Palm to Palm", "1.Back of Hands", "2.Interlaced Fingers", "3.Backs of Fingers", "4.Thumbs", "5.Fingertips and Nails"]
 
-# 간단한 부위 마킹 (직사각형 영역 예시)
-regions = {
-    "palm": ((int(width * 0.35), int(height * 0.55)), (int(width * 0.65), int(height * 0.75))),
-    "fingers": ((int(width * 0.4), int(height * 0.1)), (int(width * 0.6), int(height * 0.3))),
-    "thumb": ((int(width * 0.15), int(height * 0.4)), (int(width * 0.3), int(height * 0.6))),
-    "nail": ((int(width * 0.4), int(height * 0.05)), (int(width * 0.6), int(height * 0.1))),
-    "back": ((int(width * 0.35), int(height * 0.35)), (int(width * 0.65), int(height * 0.5))),
-    "between": ((int(width * 0.42), int(height * 0.3)), (int(width * 0.58), int(height * 0.4)))
-}
+# 웹캠 열기
+cap = cv2.VideoCapture(0)
 
-# 색상 설정 (BGR -> RGB 변환됨)
-colors = {
-    "palm": (0, 255, 0),
-    "fingers": (255, 255, 0),
-    "thumb": (255, 0, 255),
-    "nail": (0, 128, 255),
-    "back": (255, 0, 0),
-    "between": (0, 255, 255)
-}
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-# 각 영역에 색상 칠하기
-for region, ((x1, y1), (x2, y2)) in regions.items():
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), colors[region], -1)
+    # YOLO 예측
+    results = model.predict(source=frame, conf=0.5, verbose=False)
+    boxes = results[0].boxes
 
-# 반투명 시각화
-alpha = 0.4
-visualized_img = cv2.addWeighted(overlay, alpha, hand_img, 1 - alpha, 0)
+    predicted_class = None
 
-# 시각화
-plt.figure(figsize=(8, 8))
-plt.imshow(visualized_img)
-plt.title("WHO 6-Stage Hand Washing Regions")
-plt.axis('off')
-plt.show()
+    # 가장 큰 box 하나만 사용 (보통 손 하나 기준)
+    if boxes:
+        # class id를 가져옴 (가장 큰 박스 기준)
+        largest_box = max(boxes, key=lambda b: (b.xyxy[0][2] - b.xyxy[0][0]) * (b.xyxy[0][3] - b.xyxy[0][1]))
+        class_id = int(largest_box.cls[0])
+        predicted_class = class_names[class_id]
+        history.append(predicted_class)
+
+        # bbox 시각화
+        x1, y1, x2, y2 = map(int, largest_box.xyxy[0])
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+        cv2.putText(frame, predicted_class, (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 255), 2)
+
+    # 후처리: 최근 history 기반 다수결
+    if history:
+        final_prediction = Counter(history).most_common(1)[0][0]
+        cv2.putText(frame, f"Smoothed: {final_prediction}", (30, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+
+    cv2.imshow("YOLO + Gesture Smoothing", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+
 
